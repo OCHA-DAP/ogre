@@ -3,6 +3,9 @@ var multiparty = require('connect-multiparty')
 var ogr2ogr = require('ogr2ogr')
 var fs = require('fs')
 var urlencoded = require('body-parser').urlencoded
+var http = require('http')
+var https = require('https')
+var tmp = require('tmp')
 
 function enableCors (req, res, next) {
   res.header('Access-Control-Allow-Origin', '*')
@@ -81,6 +84,48 @@ exports.createServer = function (opts) {
       res.end(buf)
     })
   })
+
+  app.get('/csv', function (req, res, next) {
+    if (!req.query.url) return res.send('No url provided')
+    console.log("Get: " + req.query.url);
+    https.get(req.query.url).on('response',
+      function (response) {
+        var body = '';
+        var i = 0;
+        var regexp = /filename=\"(.*)\"/gi;
+        var filename = regexp.exec(response.headers['content-disposition'])[1];
+
+        console.log('File name:' + filename)
+        var path = tmp.tmpNameSync({postfix: filename});
+        var file = fs.createWriteStream(path);
+
+        response.on('data', function (chunk) {
+          i++;
+          body += chunk;
+          file.write(chunk);
+        });
+        response.on('end', function () {
+          console.log('Finished downloading file');
+          file.end();
+          var ogr
+          ogr = ogr2ogr(path);
+
+          if ('skipFailures' in req.query) {
+            ogr.skipfailures()
+          }
+
+          ogr.format('csv').exec(function (er, buf) {
+            if (er) return res.json({ errors: er.message.replace('\n\n','').split('\n') })
+            // res.header('Content-Type', 'application/csv')
+            // res.header('Content-Disposition', 'filename=' + (req.query.outputName || 'result.csv'))
+            res.write(buf)
+            res.end();
+            fs.unlink(path);
+          })
+        });
+      });
+  })
+
 
   app.use(function (er, req, res, next) {
     console.error(er.stack)
